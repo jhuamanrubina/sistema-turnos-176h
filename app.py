@@ -6,7 +6,7 @@ import calendar
 import random
 
 # --- CONFIGURACIÓN ---
-COORDINADORES_AUTORIZADOS = {"Samay02": "pass123", "Yape": "yape2024", "Admin": "admin789"}
+COORDINADORES_AUTORIZADOS = {"Samay02": "pass123", "Yape": "yape2024", "Capacity": "capa123", "Samay01": "pass123", "Admin": "admin789"}
 DB_FILE = 'especialistas_vFinal.csv'
 TURNOS_OPCIONES = ["6am-2pm", "9am-6pm", "6pm-2am", "10pm-6am"]
 POOLS_DISPONIBLES = ["Samay02", "Yape", "proyectos", "Legacy", "Samay01", "SYF", "Capacity"]
@@ -149,4 +149,5 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
             st.dataframe(cob.T.style.applymap(lambda x: f'background-color: {"#2ecc71" if x > 0 else "#e74c3c"}; color: white'), use_container_width=True)
 
 else: st.info("Credenciales requeridas.")
+
 
