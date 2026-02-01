@@ -23,7 +23,6 @@ def guardar_datos(df):
 
 def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
     num_dias = calendar.monthrange(anio, mes)[1]
-    # Filtra especialistas asignados a ti (incluye los que te prestaron de Capacity)
     df_filt = df_base[df_base['Coordinador'] == coordinador_actual].copy()
     especialistas = df_filt['Nombre'].tolist()
     
@@ -77,7 +76,6 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
     with t2:
         st.subheader("Panel de Personal y Préstamos de Capacity")
         
-        # SECCIÓN 1: CAPACIDAD DE PRÉSTAMO
         with st.expander("🔄 Solicitar Apoyo de Capacity (Préstamo)"):
             recursos_capacity = df_base[df_base['Pool'] == 'Capacity']
             if not recursos_capacity.empty:
@@ -90,7 +88,6 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
             else:
                 st.info("No hay recursos en el pool de Capacity actualmente.")
 
-        # SECCIÓN 2: REGISTRO Y ELIMINACIÓN
         with st.expander("➕ Registrar/Retirar Especialista"):
             c1, c2, c3 = st.columns(3)
             n_nom = c1.text_input("Nombre Nuevo")
@@ -106,9 +103,8 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
             esp_eliminar = st.selectbox("Seleccionar para retirar (Baja/Vacaciones)", ["---"] + df_base[df_base['Coordinador']==u]['Nombre'].tolist())
             if st.button("❌ Confirmar Salida"):
                 if esp_eliminar != "---":
-                    # Si es de Capacity, lo devolvemos a su pool original en lugar de borrarlo
                     if df_base.loc[df_base['Nombre'] == esp_eliminar, 'Pool'].values[0] == 'Capacity':
-                        df_base.loc[df_base['Nombre'] == esp_eliminar, 'Coordinador'] = "Admin" # O el coord de Capacity
+                        df_base.loc[df_base['Nombre'] == esp_eliminar, 'Coordinador'] = "Admin"
                         st.info(f"{esp_eliminar} regresó al pool de Capacity.")
                     else:
                         df_base = df_base[df_base['Nombre'] != esp_eliminar]
@@ -116,7 +112,6 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
                     guardar_datos(df_base)
                     st.rerun()
 
-        # TABLA DE MI EQUIPO ACTUAL
         mis_esp = df_base[df_base['Coordinador'] == u]
         st.write("### Mi equipo para este mes:")
         st.dataframe(mis_esp[['Nombre', 'Pool', 'Turno_Fijo']], use_container_width=True)
@@ -131,7 +126,19 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
             
             if 'r_final' in st.session_state:
                 matriz = st.session_state['r_final'].pivot(index='Especialista', columns='Día', values='Turno').fillna("DESCANSO")
-                st.dataframe(matriz, use_container_width=True)
+                
+                # FUNCIÓN DE ESTILO PARA COLORES
+                def color_turnos(val):
+                    colors = {
+                        "6am-2pm": "#D1E9F6",
+                        "9am-6pm": "#FFF9BF",
+                        "6pm-2am": "#F1D3FF",
+                        "10pm-6am": "#D1FFD7",
+                        "DESCANSO": "#FFD1D1"
+                    }
+                    return f'background-color: {colors.get(val, "white")}'
+
+                st.dataframe(matriz.style.applymap(color_turnos), use_container_width=True)
 
     with t3:
         if 'h_final' in st.session_state:
