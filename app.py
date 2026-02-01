@@ -143,5 +143,10 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
     with t3:
         if 'h_final' in st.session_state:
             st.table(pd.DataFrame([{"Especialista": k, "Horas": v} for k, v in st.session_state['h_final'].items()]))
+            # Verificación de cobertura 24/7
+            st.subheader("Cobertura por Turno")
+            cob = st.session_state['r_final'].groupby(['Día', 'Turno']).size().unstack(fill_value=0)
+            st.dataframe(cob.T.style.applymap(lambda x: f'background-color: {"#2ecc71" if x > 0 else "#e74c3c"}; color: white'), use_container_width=True)
 
 else: st.info("Credenciales requeridas.")
+
