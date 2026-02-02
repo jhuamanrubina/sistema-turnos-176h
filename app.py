@@ -34,13 +34,13 @@ def es_ausente(nombre, dia, mes, anio, df_aus):
     ausencia = df_aus[df_aus['Nombre'] == nombre]
     for _, fila in ausencia.iterrows():
         try:
-            inicio = datetime.datetime.strptime(fila['Inicio'], '%Y-%m-%d').date()
-            fin = datetime.datetime.strptime(fila['Fin'], '%Y-%m-%d').date()
+            inicio = pd.to_datetime(fila['Inicio']).date()
+            fin = pd.to_datetime(fila['Fin']).date()
             if inicio <= fecha <= fin: return True
         except: continue
     return False
 
-# --- MOTOR DE HORARIOS ---
+# --- MOTOR DE HORARIOS MENSUALES ---
 def generar_rol_perfecto(mes, anio, df_base, coordinador_actual, df_aus):
     num_dias = calendar.monthrange(anio, mes)[1]
     df_propios = df_base[df_base['Coordinador'] == coordinador_actual].copy()
@@ -52,7 +52,6 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual, df_aus):
     
     if not especialistas_propios: return pd.DataFrame(), {}
 
-    # Mapa de turnos preferidos
     mapa_turnos = {}
     for _, fila in pd.concat([df_propios, df_capacity]).iterrows():
         mapa_turnos[fila['Nombre']] = fila['Turno_Fijo']
@@ -63,11 +62,10 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual, df_aus):
     ultimo_dia = {nom: -1 for nom in todos}
 
     for dia in range(1, num_dias + 1):
-        # Identificar quiénes del equipo propio NO están hoy
         faltantes_hoy = [n for n in especialistas_propios if es_ausente(n, dia, mes, anio, df_aus)]
-        
-        # Candidatos: Propios disponibles + Gente de Capacity (solo si hay faltantes)
         disponibles_hoy = [n for n in especialistas_propios if n not in faltantes_hoy]
+        
+        # Si falta alguien, habilitamos a los de Capacity
         if faltantes_hoy:
             disponibles_hoy.extend(especialistas_capacity)
 
@@ -75,24 +73,26 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual, df_aus):
         turnos_cubiertos = {t: 0 for t in TURNOS_OPCIONES}
 
         for nom in candidatos:
-            # Lógica de asignación (simplificada para el ejemplo)
-            turno_pref = mapa_turnos.get(nom, "Aleatorio")
-            turno_asig = turno_pref if turno_pref in TURNOS_OPCIONES else random.choice(TURNOS_OPCIONES)
+            t_pref = mapa_turnos.get(nom, "Aleatorio")
+            t_asig = t_pref if t_pref in TURNOS_OPCIONES else random.choice(TURNOS_OPCIONES)
             
-            if horas_totales[nom] < 176 and ultimo_dia[nom] < dia and dias_seguidos[nom] < 6:
-                asignaciones.append({"Día": dia, "Especialista": nom, "Turno": turno_asig})
+            # Condición de 176h y descanso
+            if horas_totales[nom] + 8 <= 176 and ultimo_dia[nom] < dia and dias_seguidos[nom] < 6:
+                asignaciones.append({"Día": dia, "Especialista": nom, "Turno": t_asig})
                 horas_totales[nom] += 8
                 ultimo_dia[nom] = dia
                 dias_seguidos[nom] += 1
+                turnos_cubiertos[t_asig] += 1
         
-        # Marcar vacaciones en el reporte
+        # Registrar visualmente las vacaciones
         for nom in faltantes_hoy:
             asignaciones.append({"Día": dia, "Especialista": nom, "Turno": "VACACIONES"})
+            dias_seguidos[nom] = 0
 
     return pd.DataFrame(asignaciones), horas_totales
 
 # --- INTERFAZ ---
-st.set_page_config(page_title="Gestión 176h PRO", layout="wide")
+st.set_page_config(page_title="Control 176h PRO", layout="wide")
 u = st.sidebar.selectbox("Coordinador", list(COORDINADORES_AUTORIZADOS.keys()))
 p = st.sidebar.text_input("Password", type="password")
 
@@ -100,41 +100,70 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
     df_base = cargar_datos()
     df_aus = cargar_ausencias()
     
-    t1, t2, t3 = st.tabs(["🗓️ Rol Mensual", "👥 Personal y Vacaciones", "📊 Auditoría"])
+    t1, t2, t3 = st.tabs(["🗓️ Rol Mensual", "👥 Gestión de Equipo", "📊 Auditoría"])
 
     with t2:
-        st.subheader("Gestión de Ausencias Temporales")
-        with st.expander("📅 Registrar Días de Vacaciones"):
-            c1, c2, c3 = st.columns(3)
-            quien = c1.selectbox("Especialista", df_base[df_base['Coordinador']==u]['Nombre'])
-            f_ini = c2.date_input("Inicio", key="ini")
-            f_fin = c3.date_input("Fin", key="fin")
-            if st.button("Confirmar Días"):
-                nueva = pd.DataFrame([[quien, str(f_ini), str(f_fin)]], columns=['Nombre', 'Inicio', 'Fin'])
-                df_aus = pd.concat([df_aus, nueva], ignore_index=True)
-                guardar_datos(df_aus, AUSENCIAS_FILE)
-                st.success(f"Días registrados para {quien}")
+        # AQUÍ REGRESA EL REGISTRO DE ESPECIALISTAS
+        st.subheader("Gestión de Personal")
+        with st.expander("➕ Registrar Nuevo Especialista"):
+            with st.form("nuevo_esp", clear_on_submit=True):
+                c1, c2, c3 = st.columns(3)
+                n_nom = c1.text_input("Nombre")
+                n_pool = c2.selectbox("Pool", POOLS_DISPONIBLES)
+                n_fijo = c3.selectbox("Turno Fijo", ["Aleatorio"] + TURNOS_OPCIONES)
+                if st.form_submit_button("Guardar Especialista"):
+                    if n_nom:
+                        nueva = pd.DataFrame([[n_nom, n_pool, u, n_fijo]], columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo'])
+                        df_base = pd.concat([df_base, nueva], ignore_index=True)
+                        guardar_datos(df_base, DB_FILE)
+                        st.success(f"{n_nom} registrado.")
+                        st.rerun()
 
-        st.write("### Ausencias Programadas")
-        st.dataframe(df_aus, use_container_width=True)
+        # SECCIÓN DE VACACIONES
+        st.subheader("Control de Vacaciones (Días específicos)")
+        with st.expander("📅 Registrar Ausencia"):
+            c1, c2, c3 = st.columns(3)
+            quien_v = c1.selectbox("Especialista", df_base[df_base['Coordinador']==u]['Nombre'].tolist() if not df_base.empty else [])
+            f_ini = c2.date_input("Inicio")
+            f_fin = c3.date_input("Fin")
+            if st.button("Guardar Vacaciones"):
+                nueva_v = pd.DataFrame([[quien_v, str(f_ini), str(f_fin)]], columns=['Nombre', 'Inicio', 'Fin'])
+                df_aus = pd.concat([df_aus, nueva_v], ignore_index=True)
+                guardar_datos(df_aus, AUSENCIAS_FILE)
+                st.success("Registrado correctamente.")
+                st.rerun()
+        
+        if st.button("🗑️ Limpiar todas las vacaciones"):
+            guardar_datos(pd.DataFrame(columns=['Nombre', 'Inicio', 'Fin']), AUSENCIAS_FILE)
+            st.rerun()
 
     with t1:
-        mes = st.selectbox("Mes", range(1, 13), index=datetime.datetime.now().month-1)
-        if st.button("🚀 GENERAR HORARIO"):
+        # EL HORARIO REGRESA A SER MENSUAL COMPLETO
+        st.subheader("Generación de Rol Mensual")
+        mes = st.selectbox("Seleccione el Mes", range(1, 13), index=datetime.datetime.now().month-1)
+        
+        if st.button("🚀 GENERAR HORARIO COMPLETO"):
             df_res, hrs = generar_rol_perfecto(mes, 2026, df_base, u, df_aus)
             st.session_state['r_final'] = df_res
+            st.session_state['h_final'] = hrs
 
-        if 'r_final' in st.session_state:
+        if 'r_final' in st.session_state and not st.session_state['r_final'].empty:
             matriz = st.session_state['r_final'].pivot(index='Especialista', columns='Día', values='Turno').fillna("DESCANSO")
             
-            # Exportación Excel arreglada (sep=;)
+            # Botón de Excel Arreglado
             csv = matriz.to_csv(index=True, sep=';', encoding='utf-8-sig')
-            st.download_button("📥 Descargar para Excel", csv, f"Rol_{u}_{mes}.csv", "text/csv")
+            st.download_button("📥 Descargar Excel (.csv)", csv, f"Rol_{u}_Mes_{mes}.csv", "text/csv")
 
-            def color_turnos(val):
-                colors = {"6am-2pm":"#D1E9F6","9am-6pm":"#FFF9BF","6pm-2am":"#F1D3FF","10pm-6am":"#D1FFD7","VACACIONES":"#FFCC00","DESCANSO":"#FFD1D1"}
+            def estilo(val):
+                colors = {"6am-2pm":"#D1E9F6","9am-6pm":"#FFF9BF","6pm-2am":"#F1D3FF","10pm-6am":"#D1FFD7","VACACIONES":"#FFB347","DESCANSO":"#FFD1D1"}
                 return f'background-color: {colors.get(val, "white")}'
 
-            st.dataframe(matriz.style.applymap(color_turnos), use_container_width=True)
+            st.dataframe(matriz.style.applymap(estilo), use_container_width=True)
 
-else: st.info("Ingrese credenciales")
+    with t3:
+        if 'h_final' in st.session_state:
+            st.write("### Horas Totales Mensuales")
+            res_h = pd.DataFrame([{"Especialista": k, "Horas": v} for k, v in st.session_state['h_final'].items()])
+            st.table(res_h)
+
+else: st.info("Credenciales requeridas.")
