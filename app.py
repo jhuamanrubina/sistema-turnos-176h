@@ -6,163 +6,148 @@ import calendar
 import random
 
 # --- CONFIGURACIÓN ---
-COORDINADORES_AUTORIZADOS = {
-    "Samay02": "pass123", 
-    "Yape": "yape2024", 
-    "Capacity": "capa123", 
-    "Samay01": "pass123", 
-    "Admin": "admin789"
-}
+COORDINADORES_AUTORIZADOS = {"Samay02": "pass123", "Yape": "yape2024", "Capacity": "capa123", "Samay01": "pass123", "Admin": "admin789"}
 DB_FILE = 'especialistas_vFinal.csv'
-TURNOS_OPCIONES = ["6am-2pm", "9am-6pm", "6pm-2am", "10pm-6am", "DESCANSO", "VACACIONES"]
+TURNOS_OPCIONES = ["6am-2pm", "9am-6pm", "6pm-2am", "10pm-6am"]
 POOLS_DISPONIBLES = ["Samay02", "Yape", "proyectos", "Legacy", "Samay01", "SYF", "Capacity"]
 
-# --- FUNCIONES DE PERSISTENCIA ---
 def cargar_datos():
     if os.path.exists(DB_FILE):
         df = pd.read_csv(DB_FILE)
-        for col in ['Vac_Inicio', 'Vac_Fin', 'Turno_Fijo', 'Estado']:
-            if col not in df.columns: 
-                df[col] = "Disponible" if col == 'Estado' else ""
+        if 'Turno_Fijo' not in df.columns: df['Turno_Fijo'] = "Aleatorio"
         return df
-    return pd.DataFrame(columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo', 'Vac_Inicio', 'Vac_Fin', 'Estado'])
+    return pd.DataFrame(columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo'])
 
 def guardar_datos(df):
     df.to_csv(DB_FILE, index=False)
 
-def generar_rol_base(mes, anio, df_base, coordinador_actual):
+def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
     num_dias = calendar.monthrange(anio, mes)[1]
     df_filt = df_base[df_base['Coordinador'] == coordinador_actual].copy()
     especialistas = df_filt['Nombre'].tolist()
-    if not especialistas: return pd.DataFrame()
+    
+    if not especialistas: return pd.DataFrame(), {}
 
-    dias = [str(d) for d in range(1, num_dias + 1)]
-    matriz = pd.DataFrame(index=especialistas, columns=dias)
+    mapa_turnos = {}
+    patron = ["6am-2pm", "9am-6pm", "9am-6pm", "6pm-2am", "10pm-6am"]
+    for i, nom in enumerate(especialistas):
+        pref = df_filt[df_filt['Nombre'] == nom]['Turno_Fijo'].values[0]
+        mapa_turnos[nom] = pref if pref in TURNOS_OPCIONES else patron[i % len(patron)]
 
-    for nom in especialistas:
-        row = df_filt[df_filt['Nombre'] == nom].iloc[0]
-        try:
-            v_ini = pd.to_datetime(row['Vac_Inicio']).date() if pd.notnull(row['Vac_Inicio']) and row['Vac_Inicio'] != "" else None
-            v_fin = pd.to_datetime(row['Vac_Fin']).date() if pd.notnull(row['Vac_Fin']) and row['Vac_Fin'] != "" else None
-        except: v_ini, v_fin = None, None
+    asignaciones = []
+    horas_totales = {nom: 0 for nom in especialistas}
+    dias_seguidos = {nom: 0 for nom in especialistas}
+    ultimo_dia_trabajado = {nom: -1 for nom in especialistas}
+
+    for dia in range(1, num_dias + 1):
+        candidatos_dia = sorted(especialistas, key=lambda x: (horas_totales[x], random.random()))
+        turnos_cubiertos = {t: 0 for t in TURNOS_OPCIONES}
         
-        horas_acum = 0
-        for dia in range(1, num_dias + 1):
-            fecha_actual = datetime.date(anio, mes, dia)
-            if v_ini and v_fin and v_ini <= fecha_actual <= v_fin:
-                matriz.loc[nom, str(dia)] = "VACACIONES"
-            elif horas_acum + 8 <= 176:
-                turno_p = row['Turno_Fijo']
-                turno = turno_p if turno_p in TURNOS_OPCIONES[:4] else random.choice(TURNOS_OPCIONES[:4])
-                matriz.loc[nom, str(dia)] = turno
-                horas_acum += 8
-            else:
-                matriz.loc[nom, str(dia)] = "DESCANSO"
-    return matriz
+        for nom in candidatos_dia:
+            turno_asig = mapa_turnos[nom]
+            minimo_req = 2 if turno_asig == "9am-6pm" else 1
+            if horas_totales[nom] + 8 <= 176 and ultimo_dia_trabajado[nom] < dia and dias_seguidos[nom] < 6:
+                if turnos_cubiertos[turno_asig] < minimo_req or horas_totales[nom] < (dia/num_dias)*176:
+                    asignaciones.append({
+                        "Día": dia, "Especialista": nom, "Turno": turno_asig,
+                        "Pool": df_filt[df_filt['Nombre']==nom]['Pool'].values[0]
+                    })
+                    horas_totales[nom] += 8
+                    ultimo_dia_trabajado[nom] = dia
+                    dias_seguidos[nom] += 1
+                    turnos_cubiertos[turno_asig] += 1
+            
+        hoy_trabajaron = [a['Especialista'] for a in asignaciones if a['Día'] == dia]
+        for n in especialistas:
+            if n not in hoy_trabajaron: dias_seguidos[n] = 0
 
-# --- INTERFAZ STREAMLIT ---
-st.set_page_config(page_title="Control 176h & Capacity Lock", layout="wide")
+    return pd.DataFrame(asignaciones), horas_totales
+
+# --- INTERFAZ ---
+st.set_page_config(page_title="Control 176h - Gestión de Reemplazos", layout="wide")
 u = st.sidebar.selectbox("Coordinador Actual", list(COORDINADORES_AUTORIZADOS.keys()))
 p = st.sidebar.text_input("Contraseña", type="password")
 
 if p == COORDINADORES_AUTORIZADOS.get(u):
     df_base = cargar_datos()
-    t1, t2 = st.tabs(["🗓️ Rol Mensual", "👥 Gestión de Personal"])
+    
+    t1, t2, t3 = st.tabs(["🗓️ Rol Mensual", "👥 Gestión de Personal", "📊 Auditoría"])
 
     with t2:
-        st.subheader("Panel de Gestión de Equipo")
+        st.subheader("Panel de Personal y Préstamos de Capacity")
         
-        # --- FILA 1: ALTAS Y CAPACITY ---
-        col_alta, col_cap = st.columns(2)
-        
-        with col_alta:
-            with st.expander("➕ Registrar Nuevo Especialista (Fijo)", expanded=False):
-                with st.form("form_alta"):
-                    n_nombre = st.text_input("Nombre Completo")
-                    n_pool = st.selectbox("Pool de Origen", POOLS_DISPONIBLES)
-                    n_turno = st.selectbox("Turno Asignado", ["Aleatorio"] + TURNOS_OPCIONES[:4])
-                    submit = st.form_submit_button("Guardar en mi Equipo")
-                    if submit and n_nombre:
-                        nueva_fila = {
-                            'Nombre': n_nombre, 'Pool': n_pool, 'Coordinador': u,
-                            'Turno_Fijo': n_turno, 'Vac_Inicio': '', 'Vac_Fin': '', 'Estado': 'Ocupado'
-                        }
-                        df_base = pd.concat([df_base, pd.DataFrame([nueva_fila])], ignore_index=True)
-                        guardar_datos(df_base)
-                        st.success(f"{n_nombre} registrado.")
-                        st.rerun()
+        with st.expander("🔄 Solicitar Apoyo de Capacity (Préstamo)"):
+            recursos_capacity = df_base[df_base['Pool'] == 'Capacity']
+            if not recursos_capacity.empty:
+                seleccionado = st.selectbox("Especialista disponible en Capacity", recursos_capacity['Nombre'].tolist())
+                if st.button("Asignar a mi Pool temporalmente"):
+                    df_base.loc[df_base['Nombre'] == seleccionado, 'Coordinador'] = u
+                    guardar_datos(df_base)
+                    st.success(f"{seleccionado} ahora está bajo tu coordinación.")
+                    st.rerun()
+            else:
+                st.info("No hay recursos en el pool de Capacity actualmente.")
 
-        with col_cap:
-            with st.expander("🔄 Solicitar Apoyo de Capacity (Lock)", expanded=False):
-                libres = df_base[(df_base['Pool'] == 'Capacity') & (df_base['Estado'] == 'Disponible')]
-                if not libres.empty:
-                    seleccionado = st.selectbox("Recursos Libres", libres['Nombre'].tolist())
-                    if st.button("Asignar a mi Pool"):
-                        df_base.loc[df_base['Nombre'] == seleccionado, ['Coordinador', 'Estado']] = [u, 'Ocupado']
-                        guardar_datos(df_base)
-                        st.rerun()
-                else:
-                    st.warning("No hay personal de Capacity disponible.")
-
-        # --- FILA 2: VACACIONES Y BAJAS ---
-        col_vac, col_baja = st.columns(2)
-        
-        with col_vac:
-            with st.expander("📅 Registrar Rango de Vacaciones"):
-                nombres_eq = df_base[df_base['Coordinador'] == u]['Nombre'].tolist()
-                if nombres_eq:
-                    esp_v = st.selectbox("Especialista", nombres_eq)
-                    v_inicio = st.date_input("Fecha Inicio", key="v_ini")
-                    v_final = st.date_input("Fecha Fin", key="v_fin")
-                    if st.button("Guardar Vacaciones"):
-                        df_base.loc[df_base['Nombre'] == esp_v, ['Vac_Inicio', 'Vac_Fin']] = [v_inicio, v_final]
-                        guardar_datos(df_base)
-                        st.success("Rango guardado.")
-        
-        with col_baja:
-            with st.expander("❌ Retirar Especialista / Liberar"):
-                mis_esp_nombres = df_base[df_base['Coordinador'] == u]['Nombre'].tolist()
-                esp_elim = st.selectbox("Seleccionar Especialista", ["---"] + mis_esp_nombres)
-                if st.button("Confirmar Salida"):
-                    if esp_elim != "---":
-                        idx = df_base[df_base['Nombre'] == esp_elim].index[0]
-                        # Si es Capacity, vuelve al pool general. Si es fijo, se elimina.
-                        if df_base.loc[idx, 'Pool'] == 'Capacity':
-                            df_base.loc[idx, ['Coordinador', 'Estado']] = ['Admin', 'Disponible']
-                        else:
-                            df_base = df_base.drop(idx)
-                        guardar_datos(df_base)
-                        st.rerun()
-
-        st.divider()
-        # VISUALIZACIÓN DE EQUIPO
-        mis_esp = df_base[df_base['Coordinador'] == u]
-        if not mis_esp.empty:
-            st.write(f"### Mi equipo actual ({len(mis_esp)} integrantes):")
-            def estilo_eq(row):
-                return ['background-color: #e8f4f8' if row.Pool == 'Capacity' else '' for _ in row]
-            st.dataframe(mis_esp[['Nombre', 'Pool', 'Turno_Fijo', 'Vac_Inicio', 'Vac_Fin']].style.apply(estilo_eq, axis=1), use_container_width=True)
-        
-    with t1:
-        st.subheader("Planificación Mensual")
-        mes = st.selectbox("Mes", range(1, 13), index=datetime.datetime.now().month-1)
-        if st.button("🚀 GENERAR ROL BASE"):
-            st.session_state['matriz_edicion'] = generar_rol_base(mes, 2026, df_base, u)
-        
-        if 'matriz_edicion' in st.session_state:
-            df_edit = st.data_editor(st.session_state['matriz_edicion'], use_container_width=True)
-            st.session_state['matriz_edicion'] = df_edit
+        with st.expander("➕ Registrar/Retirar Especialista"):
+            c1, c2, c3 = st.columns(3)
+            n_nom = c1.text_input("Nombre Nuevo")
+            n_pool = c2.selectbox("Pool Origen", POOLS_DISPONIBLES)
+            n_fijo = c3.selectbox("Turno", ["Aleatorio"] + TURNOS_OPCIONES)
+            if st.button("Guardar Registro"):
+                nueva = pd.DataFrame([[n_nom, n_pool, u, n_fijo]], columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo'])
+                df_base = pd.concat([df_base, nueva], ignore_index=True)
+                guardar_datos(df_base)
+                st.rerun()
             
             st.divider()
-            st.subheader("📊 Monitoreo de Cobertura (Turnos Críticos)")
-            conteo = df_edit.apply(pd.Series.value_counts).fillna(0)
-            operativos = [t for t in TURNOS_OPCIONES[:4] if t in conteo.index]
-            
-            if operativos:
-                cob = conteo.loc[operativos]
-                st.dataframe(cob.style.applymap(lambda v: 'background-color: #e74c3c; color: white' if v == 0 else 'background-color: #2ecc71; color: white'))
-                if (cob == 0).any().any():
-                    st.error("⚠️ Tienes huecos sin cubrir. Reasigna turnos manualmente en la tabla superior.")
+            esp_eliminar = st.selectbox("Seleccionar para retirar (Baja/Vacaciones)", ["---"] + df_base[df_base['Coordinador']==u]['Nombre'].tolist())
+            if st.button("❌ Confirmar Salida"):
+                if esp_eliminar != "---":
+                    if df_base.loc[df_base['Nombre'] == esp_eliminar, 'Pool'].values[0] == 'Capacity':
+                        df_base.loc[df_base['Nombre'] == esp_eliminar, 'Coordinador'] = "Admin"
+                        st.info(f"{esp_eliminar} regresó al pool de Capacity.")
+                    else:
+                        df_base = df_base[df_base['Nombre'] != esp_eliminar]
+                        st.warning(f"{esp_eliminar} eliminado del sistema.")
+                    guardar_datos(df_base)
+                    st.rerun()
 
-else:
-    st.info("🔐 Ingrese credenciales para comenzar.")
+        mis_esp = df_base[df_base['Coordinador'] == u]
+        st.write("### Mi equipo para este mes:")
+        st.dataframe(mis_esp[['Nombre', 'Pool', 'Turno_Fijo']], use_container_width=True)
+
+    with t1:
+        if not mis_esp.empty:
+            mes = st.selectbox("Mes de Planificación", range(1, 13), index=datetime.datetime.now().month-1)
+            if st.button("🚀 GENERAR HORARIO CON REEMPLAZOS"):
+                df_res, hrs = generar_rol_perfecto(mes, 2026, df_base, u)
+                st.session_state['r_final'] = df_res
+                st.session_state['h_final'] = hrs
+            
+            if 'r_final' in st.session_state:
+                matriz = st.session_state['r_final'].pivot(index='Especialista', columns='Día', values='Turno').fillna("DESCANSO")
+                
+                # FUNCIÓN DE ESTILO PARA COLORES
+                def color_turnos(val):
+                    colors = {
+                        "6am-2pm": "#D1E9F6",
+                        "9am-6pm": "#FFF9BF",
+                        "6pm-2am": "#F1D3FF",
+                        "10pm-6am": "#D1FFD7",
+                        "DESCANSO": "#FFD1D1"
+                    }
+                    return f'background-color: {colors.get(val, "white")}'
+
+                st.dataframe(matriz.style.applymap(color_turnos), use_container_width=True)
+
+    with t3:
+        if 'h_final' in st.session_state:
+            st.table(pd.DataFrame([{"Especialista": k, "Horas": v} for k, v in st.session_state['h_final'].items()]))
+            # Verificación de cobertura 24/7
+            st.subheader("Cobertura por Turno")
+            cob = st.session_state['r_final'].groupby(['Día', 'Turno']).size().unstack(fill_value=0)
+            st.dataframe(cob.T.style.applymap(lambda x: f'background-color: {"#2ecc71" if x > 0 else "#e74c3c"}; color: white'), use_container_width=True)
+
+else: st.info("Credenciales requeridas.")
+
+
