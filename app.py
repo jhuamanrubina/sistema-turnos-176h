@@ -95,7 +95,7 @@ with st.expander("🔄 Solicitar Apoyo de Capacity (Préstamo)"):
             n_nom = c1.text_input("Nombre Nuevo")
             n_pool = c2.selectbox("Pool Origen", POOLS_DISPONIBLES)
             n_fijo = c3.selectbox("Turno", ["Aleatorio"] + TURNOS_OPCIONES)
-if st.button("Guardar Registro"):
+            if st.button("Guardar Registro"):
                 # REGLA: Si el pool es Capacity, el dueño es Admin para que esté disponible.
                 # Si es otro pool, el dueño eres tú (u).
                 dueño = "Admin" if n_pool == "Capacity" else u
@@ -162,6 +162,7 @@ if st.button("Guardar Registro"):
             st.dataframe(cob.T.style.applymap(lambda x: f'background-color: {"#2ecc71" if x > 0 else "#e74c3c"}; color: white'), use_container_width=True)
 
 else: st.info("Credenciales requeridas.")
+
 
 
 
