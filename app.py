@@ -47,17 +47,36 @@ def generar_rol_base(mes, anio, df_base, coordinador_actual):
 
     for nom in especialistas:
         row = df_filt[df_filt['Nombre'] == nom].iloc[0]
-        v_ini = pd.to_datetime(row['Vac_Inicio']).date() if row['Vac_Inicio'] else None
-        v_fin = pd.to_datetime(row['Vac_Fin']).date() if row['Vac_Fin'] else None
+        
+        # --- CORRECCIÓN AQUÍ ---
+        # Convertimos y validamos que las fechas existan y sean válidas
+        try:
+            v_ini = pd.to_datetime(row['Vac_Inicio']).date() if pd.notnull(row['Vac_Inicio']) and row['Vac_Inicio'] != "" else None
+            v_fin = pd.to_datetime(row['Vac_Fin']).date() if pd.notnull(row['Vac_Fin']) and row['Vac_Fin'] != "" else None
+        except:
+            v_ini, v_fin = None, None
         
         horas_acum = 0
         for dia in range(1, num_dias + 1):
             fecha_actual = datetime.date(anio, mes, dia)
-            if v_ini and v_fin and v_ini <= fecha_actual <= v_fin:
+            
+            # Verificación segura: solo compara si ambos límites existen
+            esta_de_vacas = False
+            if v_ini and v_fin:
+                if v_ini <= fecha_actual <= v_fin:
+                    esta_de_vacas = True
+            
+            if esta_de_vacas:
                 matriz.loc[nom, str(dia)] = "VACACIONES"
             else:
                 if horas_acum + 8 <= 176:
-                    turno = row['Turno_Fijo'] if row['Turno_Fijo'] != "Aleatorio" and row['Turno_Fijo'] != "" else random.choice(TURNOS_OPCIONES[:4])
+                    turno_pref = row['Turno_Fijo']
+                    # Validamos que el turno fijo sea una de las opciones válidas
+                    if pd.notnull(turno_pref) and turno_pref in TURNOS_OPCIONES[:4]:
+                        turno = turno_pref
+                    else:
+                        turno = random.choice(TURNOS_OPCIONES[:4])
+                    
                     matriz.loc[nom, str(dia)] = turno
                     horas_acum += 8
                 else:
@@ -156,3 +175,4 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
                     st.error("🚨 ALERTA: Tienes turnos vacíos. Debes asignar un recurso de Capacity en los espacios rojos.")
             
 else: st.info("🔒 Credenciales requeridas.")
+
