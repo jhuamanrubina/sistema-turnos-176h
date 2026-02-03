@@ -76,27 +76,40 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
     with t2:
         st.subheader("Panel de Personal y Préstamos de Capacity")
         
-        with st.expander("🔄 Solicitar Apoyo de Capacity (Préstamo)"):
-            recursos_capacity = df_base[df_base['Pool'] == 'Capacity']
+with st.expander("🔄 Solicitar Apoyo de Capacity (Préstamo)"):
+            # CAMBIO AQUÍ: Filtramos por Pool 'Capacity' Y que su coordinador sea 'Admin' (está libre)
+            recursos_capacity = df_base[(df_base['Pool'] == 'Capacity') & (df_base['Coordinador'] == 'Admin')]
+            
             if not recursos_capacity.empty:
                 seleccionado = st.selectbox("Especialista disponible en Capacity", recursos_capacity['Nombre'].tolist())
                 if st.button("Asignar a mi Pool temporalmente"):
                     df_base.loc[df_base['Nombre'] == seleccionado, 'Coordinador'] = u
                     guardar_datos(df_base)
-                    st.success(f"{seleccionado} ahora está bajo tu coordinación.")
+                    st.success(f"{seleccionado} ahora está bajo tu coordinación y no aparecerá para otros.")
                     st.rerun()
             else:
-                st.info("No hay recursos en el pool de Capacity actualmente.")
+                st.info("No hay recursos disponibles en Capacity (todos están asignados).")
 
         with st.expander("➕ Registrar/Retirar Especialista"):
             c1, c2, c3 = st.columns(3)
             n_nom = c1.text_input("Nombre Nuevo")
             n_pool = c2.selectbox("Pool Origen", POOLS_DISPONIBLES)
             n_fijo = c3.selectbox("Turno", ["Aleatorio"] + TURNOS_OPCIONES)
-            if st.button("Guardar Registro"):
-                nueva = pd.DataFrame([[n_nom, n_pool, u, n_fijo]], columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo'])
+if st.button("Guardar Registro"):
+                # REGLA: Si el pool es Capacity, el dueño es Admin para que esté disponible.
+                # Si es otro pool, el dueño eres tú (u).
+                dueño = "Admin" if n_pool == "Capacity" else u
+                
+                nueva = pd.DataFrame([[n_nom, n_pool, dueño, n_fijo]], 
+                                    columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo'])
+                
                 df_base = pd.concat([df_base, nueva], ignore_index=True)
                 guardar_datos(df_base)
+                
+                if n_pool == "Capacity":
+                    st.success(f"{n_nom} registrado en Capacity (Disponible para todos)")
+                else:
+                    st.success(f"{n_nom} añadido a tu equipo")
                 st.rerun()
             
             st.divider()
@@ -149,5 +162,6 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
             st.dataframe(cob.T.style.applymap(lambda x: f'background-color: {"#2ecc71" if x > 0 else "#e74c3c"}; color: white'), use_container_width=True)
 
 else: st.info("Credenciales requeridas.")
+
 
 
