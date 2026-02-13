@@ -4,7 +4,8 @@ import os
 import datetime
 import calendar
 
-# --- CONFIGURACIÓN ---
+# ---------------- CONFIGURACIÓN ----------------
+
 COORDINADORES_AUTORIZADOS = {
     "Samay02": "pass123",
     "Yape": "yape2024",
@@ -23,7 +24,7 @@ POOLS_DISPONIBLES = [
 ]
 
 
-# --- FUNCIONES BASE ---
+# ---------------- FUNCIONES BASE ----------------
 
 def cargar_datos():
     if os.path.exists(DB_FILE):
@@ -38,7 +39,7 @@ def guardar_datos(df):
     df.to_csv(DB_FILE, index=False)
 
 
-# --- NUEVA LÓGICA 24/7 INTELIGENTE ---
+# ---------------- GENERADOR MENSUAL 176H ----------------
 
 def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
 
@@ -49,64 +50,53 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
     if not especialistas:
         return pd.DataFrame(), {}
 
+    DIAS_OBJETIVO = 176 // 8  # 22 días obligatorios
+
     asignaciones = []
     horas_totales = {nom: 0 for nom in especialistas}
+    dias_trabajados = {nom: 0 for nom in especialistas}
     dias_seguidos = {nom: 0 for nom in especialistas}
 
-    # Determinar si se puede tener 2 líneas por turno
-    minimo_por_turno = 1
-    if len(especialistas) >= len(TURNOS_OPCIONES) * 2:
-        minimo_por_turno = 2
+    # ---- ASIGNAR TURNO FIJO MENSUAL ----
+    mapa_turnos = {}
+    for i, nom in enumerate(especialistas):
+        turno_pref = df_filt[df_filt['Nombre'] == nom]['Turno_Fijo'].values[0]
+        if turno_pref in TURNOS_OPCIONES:
+            mapa_turnos[nom] = turno_pref
+        else:
+            mapa_turnos[nom] = TURNOS_OPCIONES[i % len(TURNOS_OPCIONES)]
 
+    # ---- GENERAR MES COMPLETO ----
     for dia in range(1, num_dias + 1):
 
-        turnos_cubiertos = {t: [] for t in TURNOS_OPCIONES}
+        # Ordenar por menos días trabajados
+        candidatos = sorted(especialistas, key=lambda x: dias_trabajados[x])
+        trabajaron_hoy = []
 
-        # Ordenar por menos horas trabajadas
-        candidatos = sorted(especialistas, key=lambda x: horas_totales[x])
+        for nom in candidatos:
 
-        # PASO 1: Garantizar mínimo 1 por turno (24/7 real)
-        for turno in TURNOS_OPCIONES:
-            for nom in candidatos:
-                if (
-                    horas_totales[nom] + 8 <= 176
-                    and dias_seguidos[nom] < 6
-                    and nom not in [a['Especialista'] for a in asignaciones if a['Día'] == dia]
-                ):
-                    asignaciones.append({
-                        "Día": dia,
-                        "Especialista": nom,
-                        "Turno": turno,
-                        "Pool": df_filt[df_filt['Nombre'] == nom]['Pool'].values[0]
-                    })
-                    turnos_cubiertos[turno].append(nom)
-                    horas_totales[nom] += 8
-                    dias_seguidos[nom] += 1
-                    break
+            # Si ya llegó a 22 días → no trabaja más
+            if dias_trabajados[nom] >= DIAS_OBJETIVO:
+                continue
 
-        # PASO 2: Intentar segunda línea si hay personal suficiente
-        if minimo_por_turno == 2:
-            for turno in TURNOS_OPCIONES:
-                for nom in candidatos:
-                    if (
-                        horas_totales[nom] + 8 <= 176
-                        and dias_seguidos[nom] < 6
-                        and nom not in [a['Especialista'] for a in asignaciones if a['Día'] == dia]
-                        and len(turnos_cubiertos[turno]) < 2
-                    ):
-                        asignaciones.append({
-                            "Día": dia,
-                            "Especialista": nom,
-                            "Turno": turno,
-                            "Pool": df_filt[df_filt['Nombre'] == nom]['Pool'].values[0]
-                        })
-                        turnos_cubiertos[turno].append(nom)
-                        horas_totales[nom] += 8
-                        dias_seguidos[nom] += 1
-                        break
+            # No más de 6 días seguidos
+            if dias_seguidos[nom] >= 6:
+                dias_seguidos[nom] = 0
+                continue
 
-        # Reiniciar contador de días seguidos si descansó
-        trabajaron_hoy = [a['Especialista'] for a in asignaciones if a['Día'] == dia]
+            asignaciones.append({
+                "Día": dia,
+                "Especialista": nom,
+                "Turno": mapa_turnos[nom],
+                "Pool": df_filt[df_filt['Nombre'] == nom]['Pool'].values[0]
+            })
+
+            dias_trabajados[nom] += 1
+            dias_seguidos[nom] += 1
+            horas_totales[nom] += 8
+            trabajaron_hoy.append(nom)
+
+        # Reiniciar contador si descansó
         for nom in especialistas:
             if nom not in trabajaron_hoy:
                 dias_seguidos[nom] = 0
@@ -114,9 +104,9 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
     return pd.DataFrame(asignaciones), horas_totales
 
 
-# --- INTERFAZ STREAMLIT ---
+# ---------------- INTERFAZ STREAMLIT ----------------
 
-st.set_page_config(page_title="Control 176h - Gestión 24/7", layout="wide")
+st.set_page_config(page_title="Control 176h - Rol Mensual", layout="wide")
 
 u = st.sidebar.selectbox("Coordinador Actual", list(COORDINADORES_AUTORIZADOS.keys()))
 p = st.sidebar.text_input("Contraseña", type="password")
@@ -139,11 +129,12 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
         n_fijo = c3.selectbox("Turno", ["Aleatorio"] + TURNOS_OPCIONES)
 
         if st.button("Guardar Registro"):
-            nueva = pd.DataFrame([[n_nom, n_pool, u, n_fijo]],
-                                 columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo'])
-            df_base = pd.concat([df_base, nueva], ignore_index=True)
-            guardar_datos(df_base)
-            st.rerun()
+            if n_nom.strip() != "":
+                nueva = pd.DataFrame([[n_nom, n_pool, u, n_fijo]],
+                                     columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo'])
+                df_base = pd.concat([df_base, nueva], ignore_index=True)
+                guardar_datos(df_base)
+                st.rerun()
 
         st.divider()
 
@@ -175,7 +166,7 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
                 index=datetime.datetime.now().month - 1
             )
 
-            if st.button("🚀 GENERAR HORARIO 24/7"):
+            if st.button("🚀 GENERAR HORARIO MENSUAL"):
                 df_res, hrs = generar_rol_perfecto(mes, 2026, df_base, u)
                 st.session_state['r_final'] = df_res
                 st.session_state['h_final'] = hrs
@@ -208,7 +199,7 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
 
         if 'h_final' in st.session_state:
 
-            st.subheader("Horas Totales")
+            st.subheader("Horas Totales (Debe ser 176)")
             st.table(pd.DataFrame([
                 {"Especialista": k, "Horas": v}
                 for k, v in st.session_state['h_final'].items()
