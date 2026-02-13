@@ -76,11 +76,8 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
     with t2:
         st.subheader("Panel de Personal y Préstamos de Capacity")
         
-        # --- SECCIÓN DE PRÉSTAMOS ---
         with st.expander("🔄 Solicitar Apoyo de Capacity (Préstamo)"):
-            # FILTRO CLAVE: Solo vemos a los de Capacity que actualmente pertenecen a 'Admin'
-            recursos_capacity = df_base[(df_base['Pool'] == 'Capacity') & (df_base['Coordinador'] == 'Admin')]
-            
+            recursos_capacity = df_base[df_base['Pool'] == 'Capacity']
             if not recursos_capacity.empty:
                 seleccionado = st.selectbox("Especialista disponible en Capacity", recursos_capacity['Nombre'].tolist())
                 if st.button("Asignar a mi Pool temporalmente"):
@@ -89,50 +86,34 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
                     st.success(f"{seleccionado} ahora está bajo tu coordinación.")
                     st.rerun()
             else:
-                st.info("No hay recursos disponibles en el pool de Capacity (todos asignados o vacíos).")
+                st.info("No hay recursos en el pool de Capacity actualmente.")
 
-        # --- SECCIÓN DE REGISTRO ---
         with st.expander("➕ Registrar/Retirar Especialista"):
             c1, c2, c3 = st.columns(3)
             n_nom = c1.text_input("Nombre Nuevo")
             n_pool = c2.selectbox("Pool Origen", POOLS_DISPONIBLES)
             n_fijo = c3.selectbox("Turno", ["Aleatorio"] + TURNOS_OPCIONES)
-            
             if st.button("Guardar Registro"):
-                if n_nom:
-                    # Si registramos a alguien en Capacity, su coordinador inicial es 'Admin'
-                    dueno_inicial = "Admin" if n_pool == "Capacity" else u
-                    nueva = pd.DataFrame([[n_nom, n_pool, dueno_inicial, n_fijo]], columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo'])
-                    df_base = pd.concat([df_base, nueva], ignore_index=True)
-                    guardar_datos(df_base)
-                    st.success(f"Registro exitoso: {n_nom}")
-                    st.rerun()
-                else:
-                    st.error("Escribe un nombre para continuar.")
+                nueva = pd.DataFrame([[n_nom, n_pool, u, n_fijo]], columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo'])
+                df_base = pd.concat([df_base, nueva], ignore_index=True)
+                guardar_datos(df_base)
+                st.rerun()
             
             st.divider()
-            
-            # --- SECCIÓN DE BAJAS ---
-            mis_esp_nombres = df_base[df_base['Coordinador']==u]['Nombre'].tolist()
-            esp_eliminar = st.selectbox("Seleccionar para retirar (Baja/Vacaciones)", ["---"] + mis_esp_nombres)
-            
+            esp_eliminar = st.selectbox("Seleccionar para retirar (Baja/Vacaciones)", ["---"] + df_base[df_base['Coordinador']==u]['Nombre'].tolist())
             if st.button("❌ Confirmar Salida"):
                 if esp_eliminar != "---":
-                    info_esp = df_base[df_base['Nombre'] == esp_eliminar].iloc[0]
-                    if info_esp['Pool'] == 'Capacity':
-                        # Regresa a Admin, no se borra
+                    if df_base.loc[df_base['Nombre'] == esp_eliminar, 'Pool'].values[0] == 'Capacity':
                         df_base.loc[df_base['Nombre'] == esp_eliminar, 'Coordinador'] = "Admin"
-                        st.info(f"{esp_eliminar} regresó al pool general de Capacity.")
+                        st.info(f"{esp_eliminar} regresó al pool de Capacity.")
                     else:
-                        # Se borra definitivamente
                         df_base = df_base[df_base['Nombre'] != esp_eliminar]
                         st.warning(f"{esp_eliminar} eliminado del sistema.")
-                    
                     guardar_datos(df_base)
                     st.rerun()
 
         mis_esp = df_base[df_base['Coordinador'] == u]
-        st.write(f"### Mi equipo bajo coordinación de {u}:")
+        st.write("### Mi equipo para este mes:")
         st.dataframe(mis_esp[['Nombre', 'Pool', 'Turno_Fijo']], use_container_width=True)
 
     with t1:
@@ -143,27 +124,30 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
                 st.session_state['r_final'] = df_res
                 st.session_state['h_final'] = hrs
             
-            if 'r_final' in st.session_state and not st.session_state['r_final'].empty:
+            if 'r_final' in st.session_state:
                 matriz = st.session_state['r_final'].pivot(index='Especialista', columns='Día', values='Turno').fillna("DESCANSO")
                 
+                # FUNCIÓN DE ESTILO PARA COLORES
                 def color_turnos(val):
                     colors = {
-                        "6am-2pm": "#D1E9F6", "9am-6pm": "#FFF9BF",
-                        "6pm-2am": "#F1D3FF", "10pm-6am": "#D1FFD7",
+                        "6am-2pm": "#D1E9F6",
+                        "9am-6pm": "#FFF9BF",
+                        "6pm-2am": "#F1D3FF",
+                        "10pm-6am": "#D1FFD7",
                         "DESCANSO": "#FFD1D1"
                     }
                     return f'background-color: {colors.get(val, "white")}'
 
                 st.dataframe(matriz.style.applymap(color_turnos), use_container_width=True)
-            elif 'r_final' in st.session_state:
-                st.warning("No se pudo generar el rol. Verifica que tengas personal asignado.")
 
     with t3:
         if 'h_final' in st.session_state:
             st.table(pd.DataFrame([{"Especialista": k, "Horas": v} for k, v in st.session_state['h_final'].items()]))
+            # Verificación de cobertura 24/7
             st.subheader("Cobertura por Turno")
             cob = st.session_state['r_final'].groupby(['Día', 'Turno']).size().unstack(fill_value=0)
             st.dataframe(cob.T.style.applymap(lambda x: f'background-color: {"#2ecc71" if x > 0 else "#e74c3c"}; color: white'), use_container_width=True)
 
-else: 
-    st.info("Credenciales requeridas.")
+else: st.info("Credenciales requeridas.")
+
+
