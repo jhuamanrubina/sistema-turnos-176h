@@ -4,6 +4,9 @@ import os
 import datetime
 import calendar
 
+# Mostrar errores reales (puedes quitarlo luego)
+st.set_option('client.showErrorDetails', True)
+
 # ---------------- CONFIGURACIÓN ----------------
 
 COORDINADORES_AUTORIZADOS = {
@@ -22,7 +25,6 @@ POOLS_DISPONIBLES = [
     "Samay02", "Yape", "proyectos",
     "Legacy", "Samay01", "SYF", "Capacity"
 ]
-
 
 # ---------------- FUNCIONES BASE ----------------
 
@@ -69,17 +71,14 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
     # ---- GENERAR MES COMPLETO ----
     for dia in range(1, num_dias + 1):
 
-        # Ordenar por menos días trabajados
         candidatos = sorted(especialistas, key=lambda x: dias_trabajados[x])
         trabajaron_hoy = []
 
         for nom in candidatos:
 
-            # Si ya llegó a 22 días → no trabaja más
             if dias_trabajados[nom] >= DIAS_OBJETIVO:
                 continue
 
-            # No más de 6 días seguidos
             if dias_seguidos[nom] >= 6:
                 dias_seguidos[nom] = 0
                 continue
@@ -171,12 +170,13 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
                 st.session_state['r_final'] = df_res
                 st.session_state['h_final'] = hrs
 
-            if 'r_final' in st.session_state:
+            if 'r_final' in st.session_state and not st.session_state['r_final'].empty:
 
-                matriz = st.session_state['r_final'].pivot(
+                matriz = st.session_state['r_final'].pivot_table(
                     index='Especialista',
                     columns='Día',
-                    values='Turno'
+                    values='Turno',
+                    aggfunc='first'
                 ).fillna("DESCANSO")
 
                 def color_turnos(val):
@@ -193,6 +193,8 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
                     matriz.style.applymap(color_turnos),
                     use_container_width=True
                 )
+            else:
+                st.warning("No se generaron asignaciones para este mes.")
 
     # ---------------- TAB AUDITORÍA ----------------
     with t3:
@@ -205,7 +207,10 @@ if p == COORDINADORES_AUTORIZADOS.get(u):
                 for k, v in st.session_state['h_final'].items()
             ]))
 
+        if 'r_final' in st.session_state and not st.session_state['r_final'].empty:
+
             st.subheader("Cobertura por Turno")
+
             cob = st.session_state['r_final'].groupby(
                 ['Día', 'Turno']
             ).size().unstack(fill_value=0)
