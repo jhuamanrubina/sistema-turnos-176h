@@ -3,9 +3,12 @@ import pandas as pd
 import os
 import datetime
 import calendar
-
-# Mostrar errores reales (puedes quitarlo luego)
-st.set_option('client.showErrorDetails', True)
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib import colors
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import landscape, A4
 
 # ---------------- CONFIGURACIÓN ----------------
 
@@ -41,7 +44,7 @@ def guardar_datos(df):
     df.to_csv(DB_FILE, index=False)
 
 
-# ---------------- GENERADOR MENSUAL 176H ----------------
+# ---------------- GENERADOR MENSUAL ----------------
 
 def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
 
@@ -52,14 +55,13 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
     if not especialistas:
         return pd.DataFrame(), {}
 
-    DIAS_OBJETIVO = 176 // 8  # 22 días obligatorios
+    DIAS_OBJETIVO = 176 // 8
 
     asignaciones = []
     horas_totales = {nom: 0 for nom in especialistas}
     dias_trabajados = {nom: 0 for nom in especialistas}
     dias_seguidos = {nom: 0 for nom in especialistas}
 
-    # ---- ASIGNAR TURNO FIJO MENSUAL ----
     mapa_turnos = {}
     for i, nom in enumerate(especialistas):
         turno_pref = df_filt[df_filt['Nombre'] == nom]['Turno_Fijo'].values[0]
@@ -68,13 +70,16 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
         else:
             mapa_turnos[nom] = TURNOS_OPCIONES[i % len(TURNOS_OPCIONES)]
 
-    # ---- GENERAR MES COMPLETO ----
+    desfase_inicio = {nom: i % 7 for i, nom in enumerate(especialistas)}
+
     for dia in range(1, num_dias + 1):
 
-        candidatos = sorted(especialistas, key=lambda x: dias_trabajados[x])
         trabajaron_hoy = []
 
-        for nom in candidatos:
+        for nom in especialistas:
+
+            if dia <= desfase_inicio[nom]:
+                continue
 
             if dias_trabajados[nom] >= DIAS_OBJETIVO:
                 continue
@@ -87,7 +92,6 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
                 "Día": dia,
                 "Especialista": nom,
                 "Turno": mapa_turnos[nom],
-                "Pool": df_filt[df_filt['Nombre'] == nom]['Pool'].values[0]
             })
 
             dias_trabajados[nom] += 1
@@ -95,7 +99,22 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
             horas_totales[nom] += 8
             trabajaron_hoy.append(nom)
 
-        # Reiniciar contador si descansó
+        if not trabajaron_hoy:
+            candidatos = sorted(
+                [n for n in especialistas if dias_trabajados[n] < DIAS_OBJETIVO],
+                key=lambda x: dias_trabajados[x]
+            )
+            if candidatos:
+                nom = candidatos[0]
+                asignaciones.append({
+                    "Día": dia,
+                    "Especialista": nom,
+                    "Turno": mapa_turnos[nom],
+                })
+                dias_trabajados[nom] += 1
+                dias_seguidos[nom] = 1
+                horas_totales[nom] += 8
+
         for nom in especialistas:
             if nom not in trabajaron_hoy:
                 dias_seguidos[nom] = 0
@@ -103,124 +122,87 @@ def generar_rol_perfecto(mes, anio, df_base, coordinador_actual):
     return pd.DataFrame(asignaciones), horas_totales
 
 
-# ---------------- INTERFAZ STREAMLIT ----------------
+# ---------------- EXPORTAR PDF ----------------
+
+def exportar_pdf(df_matriz, mes, anio):
+
+    archivo = "rol_mensual.pdf"
+    doc = SimpleDocTemplate(
+        archivo,
+        pagesize=landscape(A4)
+    )
+
+    elementos = []
+    estilos = getSampleStyleSheet()
+
+    titulo = Paragraph(f"Rol Mensual - {mes}/{anio}", estilos['Heading1'])
+    elementos.append(titulo)
+    elementos.append(Spacer(1, 12))
+
+    data = [df_matriz.reset_index().columns.tolist()] + df_matriz.reset_index().values.tolist()
+
+    tabla = Table(data)
+
+    tabla.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('FONTSIZE', (0, 0), (-1, -1), 6)
+    ]))
+
+    elementos.append(tabla)
+    doc.build(elementos)
+
+    return archivo
+
+
+# ---------------- INTERFAZ ----------------
 
 st.set_page_config(page_title="Control 176h - Rol Mensual", layout="wide")
 
-u = st.sidebar.selectbox("Coordinador Actual", list(COORDINADORES_AUTORIZADOS.keys()))
+u = st.sidebar.selectbox("Coordinador", list(COORDINADORES_AUTORIZADOS.keys()))
 p = st.sidebar.text_input("Contraseña", type="password")
 
 if p == COORDINADORES_AUTORIZADOS.get(u):
 
     df_base = cargar_datos()
 
-    t1, t2, t3 = st.tabs(["🗓️ Rol Mensual", "👥 Gestión de Personal", "📊 Auditoría"])
+    st.title("📅 Generador de Rol Mensual")
 
-    # ---------------- TAB PERSONAL ----------------
-    with t2:
+    mes = st.selectbox("Mes", range(1, 13), index=datetime.datetime.now().month - 1)
 
-        st.subheader("Gestión de Personal")
+    if st.button("Generar Rol"):
 
-        c1, c2, c3 = st.columns(3)
+        df_res, horas = generar_rol_perfecto(mes, 2026, df_base, u)
+        st.session_state['rol'] = df_res
+        st.session_state['horas'] = horas
 
-        n_nom = c1.text_input("Nombre Nuevo")
-        n_pool = c2.selectbox("Pool Origen", POOLS_DISPONIBLES)
-        n_fijo = c3.selectbox("Turno", ["Aleatorio"] + TURNOS_OPCIONES)
+    if 'rol' in st.session_state and not st.session_state['rol'].empty:
 
-        if st.button("Guardar Registro"):
-            if n_nom.strip() != "":
-                nueva = pd.DataFrame([[n_nom, n_pool, u, n_fijo]],
-                                     columns=['Nombre', 'Pool', 'Coordinador', 'Turno_Fijo'])
-                df_base = pd.concat([df_base, nueva], ignore_index=True)
-                guardar_datos(df_base)
-                st.rerun()
+        matriz = st.session_state['rol'].pivot_table(
+            index='Especialista',
+            columns='Día',
+            values='Turno',
+            aggfunc='first'
+        ).fillna("DESCANSO")
 
-        st.divider()
+        st.dataframe(matriz, use_container_width=True)
 
-        esp_eliminar = st.selectbox(
-            "Seleccionar para retirar",
-            ["---"] + df_base[df_base['Coordinador'] == u]['Nombre'].tolist()
-        )
+        st.subheader("Horas Totales")
+        st.table(pd.DataFrame([
+            {"Especialista": k, "Horas": v}
+            for k, v in st.session_state['horas'].items()
+        ]))
 
-        if st.button("Eliminar"):
-            if esp_eliminar != "---":
-                df_base = df_base[df_base['Nombre'] != esp_eliminar]
-                guardar_datos(df_base)
-                st.rerun()
-
-        mis_esp = df_base[df_base['Coordinador'] == u]
-        st.write("### Mi equipo:")
-        st.dataframe(mis_esp[['Nombre', 'Pool', 'Turno_Fijo']], use_container_width=True)
-
-    # ---------------- TAB ROL ----------------
-    with t1:
-
-        mis_esp = df_base[df_base['Coordinador'] == u]
-
-        if not mis_esp.empty:
-
-            mes = st.selectbox(
-                "Mes de Planificación",
-                range(1, 13),
-                index=datetime.datetime.now().month - 1
-            )
-
-            if st.button("🚀 GENERAR HORARIO MENSUAL"):
-                df_res, hrs = generar_rol_perfecto(mes, 2026, df_base, u)
-                st.session_state['r_final'] = df_res
-                st.session_state['h_final'] = hrs
-
-            if 'r_final' in st.session_state and not st.session_state['r_final'].empty:
-
-                matriz = st.session_state['r_final'].pivot_table(
-                    index='Especialista',
-                    columns='Día',
-                    values='Turno',
-                    aggfunc='first'
-                ).fillna("DESCANSO")
-
-                def color_turnos(val):
-                    colors = {
-                        "6am-2pm": "#D1E9F6",
-                        "9am-6pm": "#FFF9BF",
-                        "6pm-2am": "#F1D3FF",
-                        "10pm-6am": "#D1FFD7",
-                        "DESCANSO": "#FFD1D1"
-                    }
-                    return f'background-color: {colors.get(val, "white")}'
-
-                st.dataframe(
-                    matriz.style.applymap(color_turnos),
-                    use_container_width=True
+        if st.button("📄 Exportar a PDF"):
+            archivo = exportar_pdf(matriz, mes, 2026)
+            with open(archivo, "rb") as f:
+                st.download_button(
+                    "Descargar PDF",
+                    f,
+                    file_name="rol_mensual.pdf",
+                    mime="application/pdf"
                 )
-            else:
-                st.warning("No se generaron asignaciones para este mes.")
-
-    # ---------------- TAB AUDITORÍA ----------------
-    with t3:
-
-        if 'h_final' in st.session_state:
-
-            st.subheader("Horas Totales (Debe ser 176)")
-            st.table(pd.DataFrame([
-                {"Especialista": k, "Horas": v}
-                for k, v in st.session_state['h_final'].items()
-            ]))
-
-        if 'r_final' in st.session_state and not st.session_state['r_final'].empty:
-
-            st.subheader("Cobertura por Turno")
-
-            cob = st.session_state['r_final'].groupby(
-                ['Día', 'Turno']
-            ).size().unstack(fill_value=0)
-
-            st.dataframe(
-                cob.T.style.applymap(
-                    lambda x: f'background-color: {"#2ecc71" if x > 0 else "#e74c3c"}; color: white'
-                ),
-                use_container_width=True
-            )
 
 else:
-    st.info("Credenciales requeridas.")
+    st.warning("Ingrese credenciales válidas.")
